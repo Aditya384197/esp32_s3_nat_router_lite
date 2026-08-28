@@ -29,7 +29,7 @@ jobs:
         run: idf.py build
 
       - name: Merge flash image
-        run: idf.py merge-bin -o build/esp32s3_nat_router_merged.bin
+        run: idf.py merge-bin -o esp32s3_nat_router_merged.bin
 
       - name: Collect firmware
         run: |
