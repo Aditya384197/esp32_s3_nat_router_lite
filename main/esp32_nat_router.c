@@ -62,9 +62,9 @@ void format_uptime(uint32_t seconds, char *buf, size_t len)
     uint32_t s = seconds % 60U;
 
     if (d) {
-        snprintf(buf, len, "%ud %02uh %02um", d, h, m);
+        snprintf(buf, len, "%" PRIu32 "d %02" PRIu32 "h %02" PRIu32 "m", d, h, m);
     } else {
-        snprintf(buf, len, "%02uh %02um %02us", h, m, s);
+        snprintf(buf, len, "%02" PRIu32 "h %02" PRIu32 "m %02" PRIu32 "s", h, m, s);
     }
 }
 
