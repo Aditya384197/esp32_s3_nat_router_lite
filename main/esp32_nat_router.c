@@ -4,6 +4,7 @@
 #include <inttypes.h>
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_ota_ops.h"
 #include "esp_event.h"
 #include "esp_netif.h"
 #include "esp_wifi.h"
@@ -228,6 +229,16 @@ void router_apply_ap_config(void)
 
 void app_main(void)
 {
+    /* If this firmware was installed through OTA with rollback enabled,
+     * confirm it as valid immediately after reaching app_main. Without this,
+     * the bootloader can roll back to the previous firmware on the next reset. */
+    const esp_partition_t *running = esp_ota_get_running_partition();
+    esp_ota_img_states_t state;
+    if (running && esp_ota_get_state_partition(running, &state) == ESP_OK &&
+        state == ESP_OTA_IMG_PENDING_VERIFY) {
+        ESP_ERROR_CHECK(esp_ota_mark_app_valid_cancel_rollback());
+    }
+
     boot_time_us = esp_timer_get_time();
     nvs_init();
     ESP_ERROR_CHECK(wifi_config_load());
