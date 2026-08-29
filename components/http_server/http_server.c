@@ -47,8 +47,8 @@ static const char INDEX_HTML[] =
 "<script>"
 "const $=id=>document.getElementById(id);"
 "async function api(u,o){const r=await fetch(u,o);return r.json()}"
-"async function load(){try{const x=await api('/api/status');$('status').textContent=['Uplink: '+x.uplink,'IP: '+x.ip,'RSSI: '+x.rssi+' dBm','Uptime: '+x.uptime,'Downloaded: '+x.rx,'Uploaded: '+x.tx,'AP clients: '+x.clients,'AP SSID: '+x.ap_ssid].join('\\n');$('apssid').value=x.ap_ssid}catch(e){$('status').textContent='Status unavailable'}}"
-"async function scan(){ $('scan').textContent='Scanning...';try{const x=await api('/api/scan');$('scan').innerHTML=x.networks.map(n=>'<p><button type=button data-s='+encodeURIComponent(n.ssid)+'>Use</button> '+esc(n.ssid)+' ('+n.rssi+' dBm)</p>').join('')||'No networks found';document.querySelectorAll('[data-s]').forEach(b=>b.onclick=()=>{$('ssid').value=decodeURIComponent(b.dataset.s);$('pass').focus()})}catch(e){$('scan').textContent='Scan failed'}}"
+"async function load(){try{const x=await api('/api/status');$('status').textContent=['Uplink: '+x.uplink,'IP: '+x.ip,'RSSI: '+x.rssi+' dBm','Uptime: '+x.uptime,'Downloaded: '+x.rx,'Uploaded: '+x.tx,'AP clients: '+x.clients,'AP SSID: '+x.ap_ssid].join('\\n');if(document.activeElement!==$('apssid'))$('apssid').value=x.ap_ssid}catch(e){$('status').textContent='Status unavailable'}}"
+"async function scan(){ $('scan').textContent='Scanning...';try{const x=await api('/api/scan');$('scan').innerHTML=x.networks.map(n=>n.hidden?'<p>Hidden Wi-Fi ('+n.rssi+' dBm) — enter its SSID manually below</p>':'<p><button type=button data-s='+encodeURIComponent(n.ssid)+'>Use</button> '+esc(n.ssid)+' ('+n.rssi+' dBm)</p>').join('')||'No networks found';document.querySelectorAll('[data-s]').forEach(b=>b.onclick=()=>{$('ssid').value=decodeURIComponent(b.dataset.s);$('pass').focus()})}catch(e){$('scan').textContent='Scan failed'}}"
 "async function connectWifi(e){e.preventDefault();const b=new URLSearchParams();b.set('ssid',$('ssid').value);b.set('pass',$('pass').value);try{const x=await api('/api/connect',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:b});$('wmsg').textContent=x.message;setTimeout(load,1000)}catch(e){$('wmsg').textContent='Connection request failed'}}"
 "async function saveAP(e){e.preventDefault();const b=new URLSearchParams();b.set('ssid',$('apssid').value);b.set('pass',$('appass').value);try{const x=await api('/api/ap',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:b});$('amsg').textContent=x.message}catch(e){$('amsg').textContent='AP update failed'}}"
 "function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;')}load();setInterval(load,3000);</script></body></html>";
@@ -237,7 +237,7 @@ static esp_err_t scan_handler(httpd_req_t *req)
 
     bool first = true;
     for (uint16_t i = 0; i < count && pos < 3900; ++i) {
-        if (list[i].ssid[0] == 0) continue;
+        bool hidden = (list[i].ssid[0] == 0);
 
         char esc[65];
         size_t ew = 0;
@@ -248,8 +248,9 @@ static esp_err_t scan_handler(httpd_req_t *req)
         }
         esc[ew] = '\0';
 
-        int n = snprintf(out + pos, 4096 - pos, "%s{\"ssid\":\"%s\",\"rssi\":%d}",
-                         first ? "" : ",", esc, list[i].rssi);
+        int n = snprintf(out + pos, 4096 - pos,
+                         "%s{\"ssid\":\"%s\",\"rssi\":%d,\"hidden\":%s}",
+                         first ? "" : ",", esc, list[i].rssi, hidden ? "true" : "false");
         if (n < 0 || (size_t)n >= 4096 - pos) break;
         pos += (size_t)n;
         first = false;
