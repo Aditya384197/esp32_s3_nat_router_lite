@@ -50,7 +50,7 @@ static const char INDEX_HTML[] =
 "async function load(){try{const x=await api('/api/status');$('status').textContent=['Uplink: '+x.uplink,'IP: '+x.ip,'RSSI: '+x.rssi+' dBm','Uptime: '+x.uptime,'Downloaded: '+x.rx,'Uploaded: '+x.tx,'AP clients: '+x.clients,'AP SSID: '+x.ap_ssid].join('\\n');if(document.activeElement!==$('apssid'))$('apssid').value=x.ap_ssid}catch(e){$('status').textContent='Status unavailable'}}"
 "async function scan(){ $('scan').textContent='Scanning...';try{const x=await api('/api/scan');$('scan').innerHTML=x.networks.map(n=>n.hidden?'<p>Hidden Wi-Fi ('+n.rssi+' dBm) — enter its SSID manually below</p>':'<p><button type=button data-s='+encodeURIComponent(n.ssid)+'>Use</button> '+esc(n.ssid)+' ('+n.rssi+' dBm)</p>').join('')||'No networks found';document.querySelectorAll('[data-s]').forEach(b=>b.onclick=()=>{$('ssid').value=decodeURIComponent(b.dataset.s);$('pass').focus()})}catch(e){$('scan').textContent='Scan failed'}}"
 "async function connectWifi(e){e.preventDefault();const b=new URLSearchParams();b.set('ssid',$('ssid').value);b.set('pass',$('pass').value);try{const x=await api('/api/connect',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:b});$('wmsg').textContent=x.message;setTimeout(load,1000)}catch(e){$('wmsg').textContent='Connection request failed'}}"
-"async function saveAP(e){e.preventDefault();const b=new URLSearchParams();b.set('ssid',$('apssid').value);b.set('pass',$('appass').value);try{const x=await api('/api/ap',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:b});$('amsg').textContent=x.message}catch(e){$('amsg').textContent='AP update failed'}}"
+"async function saveAP(e){e.preventDefault();const b=new URLSearchParams();b.set('ssid',$('apssid').value.trim());b.set('pass',$('appass').value);$('amsg').textContent='Saving AP settings...';try{const r=await fetch('/api/ap',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:b});const x=await r.json();if(!r.ok||!x.ok)throw new Error(x.message||'Save failed');apDirty=false;apLoaded=true;$('amsg').textContent=x.message}catch(e){$('amsg').textContent='AP update failed: '+e.message}}"
 "function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;')}load();setInterval(load,3000);</script></body></html>";
 
 static void json_error(httpd_req_t *req, int code, const char *msg)
@@ -178,6 +178,14 @@ static esp_err_t connect_handler(httpd_req_t *req)
     return httpd_resp_sendstr(req, "{\"ok\":true,\"message\":\"Uplink saved; connecting...\"}");
 }
 
+static void apply_ap_task(void *arg)
+{
+    (void)arg;
+    vTaskDelay(pdMS_TO_TICKS(750));
+    router_apply_ap_config();
+    vTaskDelete(NULL);
+}
+
 static esp_err_t ap_handler(httpd_req_t *req)
 {
     char s[33], p[65];
@@ -188,13 +196,18 @@ static esp_err_t ap_handler(httpd_req_t *req)
 
     esp_err_t err = wifi_config_save_ap(s, p);
     if (err != ESP_OK) {
-        json_error(req, 400, "AP password must be empty or at least 8 characters");
+        json_error(req, 400, "AP SSID is required; password must be empty or at least 8 characters");
         return ESP_OK;
     }
 
-    router_apply_ap_config();
     httpd_resp_set_type(req, "application/json");
-    return httpd_resp_sendstr(req, "{\"ok\":true,\"message\":\"AP settings saved\"}");
+    err = httpd_resp_sendstr(req, "{\"ok\":true,\"message\":\"AP settings saved; reconnect to the new AP name if it changes\"}");
+    if (err == ESP_OK) {
+        if (xTaskCreate(apply_ap_task, "apply_ap", 2048, NULL, 4, NULL) != pdPASS) {
+            ESP_LOGE(TAG, "Could not schedule AP configuration update");
+        }
+    }
+    return err;
 }
 
 static esp_err_t scan_handler(httpd_req_t *req)
