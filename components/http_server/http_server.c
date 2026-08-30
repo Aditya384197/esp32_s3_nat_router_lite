@@ -102,10 +102,33 @@ static esp_err_t status_handler(httpd_req_t *req)
     return httpd_resp_send(req, out, HTTPD_RESP_USE_STRLEN);
 }
 
-static bool read_form_value(httpd_req_t *req, const char *name, char *out, size_t out_len)
+static bool url_decode(const char *src, size_t len, char *out, size_t out_len)
+{
+    size_t w = 0;
+    if (!out || out_len == 0) return false;
+    for (size_t i = 0; i < len; ++i) {
+        if (w + 1 >= out_len) return false;
+        if (src[i] == '+') {
+            out[w++] = ' ';
+        } else if (src[i] == '%' && i + 2 < len) {
+            unsigned v = 0;
+            if (sscanf(src + i + 1, "%2x", &v) != 1) return false;
+            out[w++] = (char)v;
+            i += 2;
+        } else {
+            out[w++] = src[i];
+        }
+    }
+    out[w] = '\0';
+    return true;
+}
+
+static bool read_form_pair(httpd_req_t *req,
+                           char *ssid_out, size_t ssid_len,
+                           char *pass_out, size_t pass_len)
 {
     int len = req->content_len;
-    if (len <= 0 || len > 256 || out_len < 2) return false;
+    if (len <= 0 || len > 256) return false;
 
     char body[257];
     int got = 0;
@@ -116,41 +139,30 @@ static bool read_form_value(httpd_req_t *req, const char *name, char *out, size_
     }
     body[len] = '\0';
 
-    char pattern[48];
-    snprintf(pattern, sizeof(pattern), "%s=", name);
-    char *p = strstr(body, pattern);
-    if (!p) return false;
-    p += strlen(pattern);
-
-    char *e = strchr(p, '&');
-    size_t n = e ? (size_t)(e - p) : strlen(p);
-    if (n >= out_len) n = out_len - 1;
-
-    size_t w = 0;
-    for (size_t i = 0; i < n && w + 1 < out_len; ++i) {
-        if (p[i] == '+') {
-            out[w++] = ' ';
-        } else if (p[i] == '%' && i + 2 < n) {
-            unsigned v = 0;
-            if (sscanf(p + i + 1, "%2x", &v) == 1) {
-                out[w++] = (char)v;
-                i += 2;
-            } else {
-                out[w++] = p[i];
-            }
-        } else {
-            out[w++] = p[i];
+    bool have_ssid = false;
+    bool have_pass = false;
+    char *save = NULL;
+    for (char *field = strtok_r(body, "&", &save);
+         field;
+         field = strtok_r(NULL, "&", &save)) {
+        char *eq = strchr(field, '=');
+        if (!eq) continue;
+        *eq = '\0';
+        const char *value = eq + 1;
+        size_t value_len = strlen(value);
+        if (strcmp(field, "ssid") == 0) {
+            have_ssid = url_decode(value, value_len, ssid_out, ssid_len);
+        } else if (strcmp(field, "pass") == 0) {
+            have_pass = url_decode(value, value_len, pass_out, pass_len);
         }
     }
-    out[w] = '\0';
-    return true;
+    return have_ssid && have_pass;
 }
 
 static esp_err_t connect_handler(httpd_req_t *req)
 {
     char s[33], p[65];
-    if (!read_form_value(req, "ssid", s, sizeof(s)) ||
-        !read_form_value(req, "pass", p, sizeof(p))) {
+    if (!read_form_pair(req, s, sizeof(s), p, sizeof(p))) {
         json_error(req, 400, "SSID and password are required");
         return ESP_OK;
     }
@@ -169,8 +181,7 @@ static esp_err_t connect_handler(httpd_req_t *req)
 static esp_err_t ap_handler(httpd_req_t *req)
 {
     char s[33], p[65];
-    if (!read_form_value(req, "ssid", s, sizeof(s)) ||
-        !read_form_value(req, "pass", p, sizeof(p))) {
+    if (!read_form_pair(req, s, sizeof(s), p, sizeof(p))) {
         json_error(req, 400, "AP SSID and password are required");
         return ESP_OK;
     }
@@ -237,7 +248,15 @@ static esp_err_t scan_handler(httpd_req_t *req)
 
     bool first = true;
     for (uint16_t i = 0; i < count && pos < 3900; ++i) {
-        bool hidden = (list[i].ssid[0] == 0);
+        if (list[i].ssid[0] == 0) {
+            int n = snprintf(out + pos, 4096 - pos,
+                             "%s{\"ssid\":\"\",\"rssi\":%d,\"hidden\":true}",
+                             first ? "" : ",", list[i].rssi);
+            if (n < 0 || (size_t)n >= 4096 - pos) break;
+            pos += (size_t)n;
+            first = false;
+            continue;
+        }
 
         char esc[65];
         size_t ew = 0;
@@ -248,9 +267,8 @@ static esp_err_t scan_handler(httpd_req_t *req)
         }
         esc[ew] = '\0';
 
-        int n = snprintf(out + pos, 4096 - pos,
-                         "%s{\"ssid\":\"%s\",\"rssi\":%d,\"hidden\":%s}",
-                         first ? "" : ",", esc, list[i].rssi, hidden ? "true" : "false");
+        int n = snprintf(out + pos, 4096 - pos, "%s{\"ssid\":\"%s\",\"rssi\":%d,\"hidden\":false}",
+                         first ? "" : ",", esc, list[i].rssi);
         if (n < 0 || (size_t)n >= 4096 - pos) break;
         pos += (size_t)n;
         first = false;
